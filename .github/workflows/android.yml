@@ -1,0 +1,174 @@
+name: Project Reignition Android
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dev/v1.0.x
+
+permissions:
+  contents: read
+
+env:
+  GODOT_VERSION: "4.7.2"
+  PROJECT_DIR: "Project"
+
+jobs:
+  android:
+    name: Build Android APK
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout Project Reignition
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Install .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Install Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.1" \
+            "cmdline-tools;latest" \
+            "cmake;3.10.2.4988404" \
+            "ndk;28.1.13356709"
+
+      - name: Download Godot 4.7.2 .NET
+        run: |
+          wget -q \
+            https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_mono_linux_x86_64.zip \
+            -O godot.zip
+
+          unzip -q godot.zip
+
+          GODOT_DIR=$(find . -maxdepth 1 -type d -name "Godot_v4.7.2-stable_mono_linux_x86_64")
+
+          sudo cp "$GODOT_DIR/Godot_v4.7.2-stable_mono_linux.x86_64" /usr/local/bin/godot
+          sudo chmod +x /usr/local/bin/godot
+
+          sudo cp -r "$GODOT_DIR/GodotSharp" /usr/local/bin/
+
+      - name: Verify Godot
+        run: |
+          godot --version
+          dotnet --version
+
+      - name: Check project
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          godot --headless --path . --editor --quit
+
+      - name: Restore C# dependencies
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          dotnet restore
+
+      - name: Build C# project
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          dotnet build -c Release
+
+      - name: Create Android export preset
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          mkdir -p .godot
+
+          cat > export_presets.cfg <<'EOF'
+          [preset.0]
+
+          name="Android"
+          platform="Android"
+          runnable=true
+          advanced_options=true
+          dedicated_server=false
+          custom_features=""
+          export_filter="all_resources"
+          include_filter=""
+          exclude_filter=""
+          export_path="../Project-Reignition-Android.apk"
+
+          [preset.0.options]
+
+          custom_template/debug=""
+          custom_template/release=""
+
+          gradle_build/use_gradle_build=false
+
+          architectures/armeabi-v7a=false
+          architectures/arm64-v8a=true
+          architectures/x86=false
+          architectures/x86_64=false
+
+          package/unique_name="com.raptorkillz.projectreignition"
+          package/name="Project Reignition"
+          package/signed=true
+
+          version/code=1
+          version/name="1.0.8"
+
+          screen/immersive_mode=true
+          screen/edge_to_edge=true
+
+          graphics/opengl3=true
+          graphics/vulkan=false
+
+          xr_features/xr_mode=false
+
+          launcher_icons/main_192x192="res://interface/boot/Icon.png"
+
+          EOF
+
+      - name: Install Godot Android export templates
+        run: |
+          mkdir -p ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable.mono
+
+          wget -q \
+            https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_mono_export_templates.tpz \
+            -O templates.tpz
+
+          unzip -q templates.tpz -d templates
+
+          TEMPLATE_DIR=$(find templates -type d -name "android" | head -n 1)
+
+          cp -r "$TEMPLATE_DIR"/* \
+            ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable.mono/
+
+      - name: Export Android APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+        run: |
+          godot \
+            --headless \
+            --path . \
+            --editor \
+            --export-release "Android" \
+            ../Project-Reignition-Android.apk
+
+      - name: Verify APK
+        run: |
+          ls -lh Project-Reignition-Android.apk
+          file Project-Reignition-Android.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Project-Reignition-Android
+          path: Project-Reignition-Android.apk
+          if-no-files-found: error
