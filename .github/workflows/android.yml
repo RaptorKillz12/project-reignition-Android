@@ -1,3 +1,4 @@
+
 name: Project Reignition Android
 
 on:
@@ -40,53 +41,67 @@ jobs:
 
       - name: Install Android SDK packages
         run: |
+          set -euo pipefail
+
           sdkmanager --install \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.1" \
-            "cmdline-tools;latest" \
             "cmake;3.10.2.4988404" \
             "ndk;28.1.13356709"
 
+          sdkmanager --list_installed
+
       - name: Download Godot 4.7.2 .NET
         run: |
+          set -euo pipefail
+
           wget -q \
-            https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_mono_linux_x86_64.zip \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64.zip" \
             -O godot.zip
 
           unzip -q godot.zip
 
-          GODOT_DIR=$(find . -maxdepth 1 -type d -name "Godot_v4.7.2-stable_mono_linux_x86_64")
+          GODOT_DIR="Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64"
 
-          sudo cp "$GODOT_DIR/Godot_v4.7.2-stable_mono_linux.x86_64" /usr/local/bin/godot
-          sudo chmod +x /usr/local/bin/godot
+          test -f "$GODOT_DIR/Godot_v${GODOT_VERSION}-stable_mono_linux.x86_64"
+          test -d "$GODOT_DIR/GodotSharp"
+
+          sudo install -m 755 \
+            "$GODOT_DIR/Godot_v${GODOT_VERSION}-stable_mono_linux.x86_64" \
+            /usr/local/bin/godot
 
           sudo cp -r "$GODOT_DIR/GodotSharp" /usr/local/bin/
 
-      - name: Verify Godot
+      - name: Verify Godot and .NET
         run: |
+          set -euo pipefail
           godot --version
           dotnet --version
 
       - name: Check project
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
+          set -euo pipefail
+          test -f project.godot
           godot --headless --path . --editor --quit
 
       - name: Restore C# dependencies
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
+          set -euo pipefail
           dotnet restore
 
       - name: Build C# project
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          dotnet build -c Release
+          set -euo pipefail
+          dotnet build -c Release --no-restore
 
       - name: Create Android export preset
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          mkdir -p .godot
+          set -euo pipefail
 
           cat > export_presets.cfg <<'EOF'
           [preset.0]
@@ -130,30 +145,44 @@ jobs:
           xr_features/xr_mode=false
 
           launcher_icons/main_192x192="res://interface/boot/Icon.png"
-
           EOF
 
       - name: Install Godot Android export templates
         run: |
-          mkdir -p ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable.mono
+          set -euo pipefail
+
+          TEMPLATE_VERSION="${GODOT_VERSION}.stable.mono"
+          TEMPLATE_PATH="$HOME/.local/share/godot/export_templates/$TEMPLATE_VERSION"
+
+          mkdir -p "$TEMPLATE_PATH"
 
           wget -q \
-            https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_mono_export_templates.tpz \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_mono_export_templates.tpz" \
             -O templates.tpz
 
           unzip -q templates.tpz -d templates
 
-          TEMPLATE_DIR=$(find templates -type d -name "android" | head -n 1)
+          TEMPLATE_DIR="$(find templates -type d -name android -print -quit)"
+          test -n "$TEMPLATE_DIR"
+          test -d "$TEMPLATE_DIR"
 
-          cp -r "$TEMPLATE_DIR"/* \
-            ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable.mono/
+          cp -r "$TEMPLATE_DIR"/* "$TEMPLATE_PATH"/
+
+          test -n "$(find "$TEMPLATE_PATH" -type f -print -quit)"
+
+      - name: Configure Android SDK for Godot
+        run: |
+          set -euo pipefail
+
+          echo "ANDROID_HOME=${ANDROID_HOME}" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=${ANDROID_HOME}" >> "$GITHUB_ENV"
+          echo "JAVA_HOME=${JAVA_HOME}" >> "$GITHUB_ENV"
 
       - name: Export Android APK
         working-directory: ${{ env.PROJECT_DIR }}
-        env:
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
-          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
         run: |
+          set -euo pipefail
+
           godot \
             --headless \
             --path . \
@@ -161,10 +190,19 @@ jobs:
             --export-release "Android" \
             ../Project-Reignition-Android.apk
 
+          test -s ../Project-Reignition-Android.apk
+
       - name: Verify APK
         run: |
-          ls -lh Project-Reignition-Android.apk
-          file Project-Reignition-Android.apk
+          set -euo pipefail
+
+          APK="Project-Reignition-Android.apk"
+
+          test -s "$APK"
+          ls -lh "$APK"
+          file "$APK"
+
+          "$ANDROID_HOME/build-tools/35.0.1/aapt" dump badging "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
