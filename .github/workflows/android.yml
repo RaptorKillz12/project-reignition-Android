@@ -39,38 +39,66 @@ jobs:
       - name: Install Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK packages
+      - name: Locate Android SDK manager
+        shell: bash
         run: |
           set -euo pipefail
 
-          sdkmanager --install \
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME"
+
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" \
+            -type f -name sdkmanager -print -quit 2>/dev/null || true)"
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "::error::sdkmanager was not found in Android SDK cmdline-tools."
+            find "$ANDROID_HOME" -maxdepth 4 -type f \
+              -name sdkmanager -print || true
+            exit 1
+          fi
+
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          echo "Found SDK manager: $SDKMANAGER"
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          yes | "$SDKMANAGER" \
+            --sdk_root="$ANDROID_HOME" \
+            --licenses || true
+
+          "$SDKMANAGER" \
+            --sdk_root="$ANDROID_HOME" \
+            --install \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.1" \
             "cmake;3.10.2.4988404" \
             "ndk;28.1.13356709"
 
-          sdkmanager --list_installed
+          "$SDKMANAGER" \
+            --sdk_root="$ANDROID_HOME" \
+            --list_installed
 
       - name: Download Godot 4.7.2 .NET
+        shell: bash
         run: |
           set -euo pipefail
 
-          wget -q \
-            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64.zip" \
-            -O godot.zip
+          GODOT_URL="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64.zip"
 
+          wget -q "$GODOT_URL" -O godot.zip
           unzip -q godot.zip
 
           GODOT_DIR="Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64"
+          GODOT_BIN="$GODOT_DIR/Godot_v${GODOT_VERSION}-stable_mono_linux.x86_64"
 
-          test -f "$GODOT_DIR/Godot_v${GODOT_VERSION}-stable_mono_linux.x86_64"
+          test -f "$GODOT_BIN"
           test -d "$GODOT_DIR/GodotSharp"
 
-          sudo install -m 755 \
-            "$GODOT_DIR/Godot_v${GODOT_VERSION}-stable_mono_linux.x86_64" \
-            /usr/local/bin/godot
-
+          sudo install -m 755 "$GODOT_BIN" /usr/local/bin/godot
           sudo cp -r "$GODOT_DIR/GodotSharp" /usr/local/bin/
 
       - name: Verify Godot and .NET
@@ -78,6 +106,7 @@ jobs:
           set -euo pipefail
           godot --version
           dotnet --version
+          java -version
 
       - name: Check project
         working-directory: ${{ env.PROJECT_DIR }}
@@ -100,6 +129,7 @@ jobs:
 
       - name: Create Android export preset
         working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -147,7 +177,8 @@ jobs:
           launcher_icons/main_192x192="res://interface/boot/Icon.png"
           EOF
 
-      - name: Install Godot Android export templates
+      - name: Download Android export templates
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -156,27 +187,24 @@ jobs:
 
           mkdir -p "$TEMPLATE_PATH"
 
-          wget -q \
-            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_mono_export_templates.tpz" \
-            -O templates.tpz
+          TEMPLATE_URL="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_mono_export_templates.tpz"
 
+          wget -q "$TEMPLATE_URL" -O templates.tpz
           unzip -q templates.tpz -d templates
 
           TEMPLATE_DIR="$(find templates -type d -name android -print -quit)"
           test -n "$TEMPLATE_DIR"
-          test -d "$TEMPLATE_DIR"
 
           cp -r "$TEMPLATE_DIR"/* "$TEMPLATE_PATH"/
 
           test -n "$(find "$TEMPLATE_PATH" -type f -print -quit)"
 
-      - name: Configure Android SDK for Godot
+      - name: Configure Android environment
         run: |
           set -euo pipefail
-
-          echo "ANDROID_HOME=${ANDROID_HOME}" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=${ANDROID_HOME}" >> "$GITHUB_ENV"
-          echo "JAVA_HOME=${JAVA_HOME}" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "JAVA_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
 
       - name: Export Android APK
         working-directory: ${{ env.PROJECT_DIR }}
@@ -193,6 +221,7 @@ jobs:
           test -s ../Project-Reignition-Android.apk
 
       - name: Verify APK
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -202,7 +231,14 @@ jobs:
           ls -lh "$APK"
           file "$APK"
 
-          "$ANDROID_HOME/build-tools/35.0.1/aapt" dump badging "$APK"
+          AAPT="$ANDROID_HOME/build-tools/35.0.1/aapt"
+
+          if [ -x "$AAPT" ]; then
+            "$AAPT" dump badging "$APK"
+          else
+            echo "::error::Android aapt executable not found."
+            exit 1
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
